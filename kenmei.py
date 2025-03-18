@@ -1,4 +1,4 @@
-# manga_tracker.py
+# kenmei.py
 import os
 import json
 import requests
@@ -67,7 +67,7 @@ def save_data(filename: str, data: Any) -> None:
     except IOError as e:
         print(f"Failed to save {filename}: {e}")
 
-def load_unread_data(filename: str = "Unread.json") -> Dict[str, str]:
+def load_unread_data(filename: str = "Unread.json") -> dict[str, str]:
     """Loads unread manga data from a file, returning an empty dictionary if the file is missing or invalid."""
     try:
         with open(filename, "r") as file:
@@ -75,7 +75,7 @@ def load_unread_data(filename: str = "Unread.json") -> Dict[str, str]:
     except (FileNotFoundError, json.JSONDecodeError):
         return {}
 
-def push_notification(pushover_data: Dict[str, str], title: str, latest: str) -> None:
+def push_notification(pushover_data: dict[str, str], title: str, latest: str) -> None:
     """Sends a notification using Pushover."""
     pushover_data["message"] = f"{title} | Ch. {latest} released!"
     requests.post("https://api.pushover.net/1/messages.json", data=pushover_data)
@@ -83,7 +83,7 @@ def push_notification(pushover_data: Dict[str, str], title: str, latest: str) ->
     # DEBUG
     # print(f"{title} | Ch. {latest} released!")
 
-def process_manga_entries(kenmei_data: Dict[str, Any], unread_data: Dict[str, str], pushover_data: Dict[str, str]) -> None:
+def process_manga_entries(kenmei_data: dict[str, Any], unread_data: dict[str, str], pushover_data: dict[str, str]) -> None:
     """Process manga entires, updating unread data and sending notifications if needed."""
     entries = kenmei_data.get("entries", [])
     for entry in entries:
@@ -114,10 +114,10 @@ def main():
 
     email = os.getenv("KENMEI_EMAIL")
     password = os.getenv("KENMEI_PASSWORD")
-    pushpver_acc_key = os.getenv("PUSHOVER_ACC_KEY")
+    pushover_acc_key = os.getenv("PUSHOVER_ACC_KEY")
     pushover_app_key = os.getenv("PUSHOVER_APP_KEY")
 
-    if not any(email, password, pushover_acc_key, pushover_app_key):
+    if not all([email, password, pushover_acc_key, pushover_app_key]):
         print("Missing environment variables.")
         return
 
@@ -143,7 +143,7 @@ def main():
         return
 
     unread_data = load_unread_data()
-    proces_manga_entries(kenmei_data, unread_data, pushover_data)
+    process_manga_entries(kenmei_data, unread_data, pushover_data)
 
     save_data("unread.json", unread_data)
 
