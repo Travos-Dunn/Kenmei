@@ -28,3 +28,12 @@ jobs:
           PUSHOVER_ACC_KEY: ${{ secrets.PUSHOVER_ACC_KEY }}
           PUSHOVER_APP_KEY: ${{ secrets.PUSHOVER_APP_KEY }}
         run: python kenmei.py
+      
+      - name: Commit and push changes
+        if: success() # Only commit and push if the script ran successfully
+        run: |
+          git config --global user.name "GitHub Actions"
+          git config --global user.email "actions@github.com"
+          git add unread.json
+          git commit -m "Update unread.json with new manga data"
+          git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }} HEAD:${{ github.ref }}
