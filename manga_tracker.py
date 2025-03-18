@@ -1,18 +1,14 @@
 # manga_tracker.py
-from datetime import datetime
 import os
-import requests
 import json
+import requests
 import uuid
-from typing import Dict, Any
-from dotenv import load_dotenv
-
-env_path = "/Users/travis/vs-workspace/Kenmei/login.env"
-load_dotenv(env_path)
+from datetime import datetime
+from typing import Any
 
 session = requests.Session()
 
-def get_config() -> Dict[str, str]:
+def get_config() -> dict[str, str]:
     """Returns API keys and URL for Kenmei and Pushover."""
     return {
         "kenmei_login_url": "https://api.kenmei.co/auth/sessions",
@@ -22,7 +18,7 @@ def get_config() -> Dict[str, str]:
         "pushover_app_key": "",
     }
 
-def generate_headers() -> Dict[str, str]:
+def generate_headers() -> dict[str, str]:
     """Generates the necessary headers for requests."""
     return {
         "Accept": "application/json, text/plain, */*",
@@ -58,7 +54,7 @@ def fetch_kenmei_data(kenmei_url: str, kenmei_key: str) -> Any:
         response.raise_for_status()
         return response.json()
     except requests.exceptions.RequestException as e:
-        print(f"> Failed to fetch Kenmei data: {e}")
+        print(f"Failed to fetch Kenmei data: {e}")
         return None
 
 def save_data(filename: str, data: Any) -> None:
@@ -69,7 +65,7 @@ def save_data(filename: str, data: Any) -> None:
         with open(filepath, "w") as file:
             json.dump(data, file, indent=4)
     except IOError as e:
-        print(f"> Failed to save {filename}: {e}")
+        print(f"Failed to save {filename}: {e}")
 
 def load_unread_data(filename: str = "Unread.json") -> Dict[str, str]:
     """Loads unread manga data from a file, returning an empty dictionary if the file is missing or invalid."""
@@ -93,7 +89,7 @@ def process_manga_entries(kenmei_data: Dict[str, Any], unread_data: Dict[str, st
     for entry in entries:
         attributes = entry.get("attributes", {})
         if not attributes:
-            print(f"> Failed to retrieve attributes for {entry.get('id')}")
+            print(f"Failed to retrieve attributes for {entry.get('id')}")
             continue
 
         title = attributes.get("title")
@@ -102,7 +98,7 @@ def process_manga_entries(kenmei_data: Dict[str, Any], unread_data: Dict[str, st
         latest = int(latest) if isinstance(latest, (float, int)) and latest == round(latest) else latest
 
         if not (title or latest):
-            print(f"> Missing title or latest chapter info for {entry.get('id')}")
+            print(f"Missing title or latest chapter info for {entry.get('id')}")
             continue
         
         if unread:
@@ -114,13 +110,20 @@ def process_manga_entries(kenmei_data: Dict[str, Any], unread_data: Dict[str, st
 
 def main():
     """Main execution function."""
-    os.chdir("/Users/travis/vs-workspace/Kenmei/")
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    print(f"> Script last ran at: {now}")
+    print(f"Script last ran at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
+    email = os.getenv("KENMEI_EMAIL")
+    password = os.getenv("KENMEI_PASSWORD")
+    pushpver_acc_key = os.getenv("PUSHOVER_ACC_KEY")
+    pushover_app_key = os.getenv("PUSHOVER_APP_KEY")
+
+    if not any(email, password, pushover_acc_key, pushover_app_key):
+        print("Missing environment variables.")
+        return
 
     config = get_config()
-    config["pushover_acc_key"] = os.getenv("PUSHOVER_ACC_KEY")
-    config["pushover_app_key"] = os.getenv("PUSHOVER_APP_KEY")
+    config["pushover_acc_key"] = pushover_acc_key
+    config["pushover_app_key"] = pushover_app_key
 
     pushover_data = {
         "token": config["pushover_app_key"],
@@ -128,27 +131,21 @@ def main():
         "message": ""
     }
 
-    email = os.getenv("KENMEI_EMAIL")
-    password = os.getenv("KENMEI_PASSWORD")
-    if not email or not password:
-        print("> Missing email or password in environment variables.")
-        return
     auth_key = fetch_auth_key(config["kenmei_login_url"], email, password)
-    
     if not auth_key:
-        print(f"> Failed to collect authentication key.")
+        print("Failed to collect authentication key.")
         return
     config["kenmei_auth_key"] = auth_key
 
     kenmei_data = fetch_kenmei_data(config["kenmei_manga_url"], config["kenmei_auth_key"])
     if not kenmei_data:
-        print(f"> Failed to load Kenmei data.")
+        print(f"Failed to load Kenmei data.")
         return
 
     unread_data = load_unread_data()
-    process_manga_entries(kenmei_data, unread_data, pushover_data)
-    
-    save_data("Unread.json", unread_data)
+    proces_manga_entries(kenmei_data, unread_data, pushover_data)
+
+    save_data("unread.json", unread_data)
 
 if __name__ == "__main__":
     main()
