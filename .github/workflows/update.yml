@@ -27,4 +27,4 @@ jobs:
           KENMEI_PASSWORD: ${{ secrets.KENMEI_PASSWORD }}
           PUSHOVER_ACC_KEY: ${{ secrets.PUSHOVER_ACC_KEY }}
           PUSHOVER_APP_KEY: ${{ secrets.PUSHOVER_APP_KEY }}
-        run: python manga_tracker.py
+        run: python kenmei.py
