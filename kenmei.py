@@ -67,7 +67,7 @@ def save_data(filename: str, data: Any) -> None:
     except IOError as e:
         print(f"Failed to save {filename}: {e}")
 
-def load_unread_data(filename: str = "Unread.json") -> dict[str, str]:
+def load_unread_data(filename: str = "unread.json") -> dict[str, str]:
     """Loads unread manga data from a file, returning an empty dictionary if the file is missing or invalid."""
     try:
         with open(filename, "r") as file:
