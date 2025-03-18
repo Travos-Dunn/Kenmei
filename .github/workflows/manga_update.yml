@@ -1,0 +1,30 @@
+name: Manga Tracker
+
+on:
+  schedule:
+    - cron: "0 * * * *" # Runs every hour
+  workflow_dispatch: # Allows manual execution
+
+jobs:
+  run-script:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: pip install requests python-dotenv
+
+      - name: Run the manga tracker script
+      env:
+        KENMEI_EMAIL: ${{ secrets.KENMEI_EMAIL }}
+        KENMEI_PASSWORD: ${{ secrets.KENMEI_PASSWORD }}
+        PUSHOVER_ACC_KEY: ${{ secrets.PUSHOVER_ACC_KEY }}
+        PUSHOVER_APP_KEY: ${{ secrets.PUSHOVER_APP_KEY }}
+      run python manga_tracker.py
