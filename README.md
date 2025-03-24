@@ -1,5 +1,5 @@
 # Kenmei - Manga Tracker
-A simple script that tracks manga updates and sends noficiations when a new chapter is released.
+A simple script that tracks manga updates and sends notifications when a new chapter is released.
 The script uses the Kenmei API to check for new chapters and sends notifications using Pushover.
 
 ## Features
