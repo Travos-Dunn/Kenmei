@@ -24,7 +24,6 @@ class KenmeiClient:
     :param pushover_acc_key: The user key for Pushover notifications.
     :type pushover_acc_key: str
     """
-
     BASE_URLS = {
         "login": "https://api.kenmei.co/auth/sessions",
         "manga": "https://api.kenmei.co/api/v2/manga_entries?page=1&status=1"
@@ -126,14 +125,16 @@ class KenmeiClient:
                 latest = latest.get("chapter")
 
             if isinstance(latest, (str, float, int)) and str(latest).replace(".", "", 1).isdigit():
-                latest = int(float(latest))
+                latest = float(latest)
 
             if not title or latest is None:
                 logging.warning(f"Missing title/latest chapter for {entry.get('id')}")
                 continue
 
-            if unread and unread_data.get(title) != latest:
-                unread_data[title] = latest
+            latest_str = str(latest) if not latest.is_integer() else str(int(latest))
+
+            if unread and unread_data.get(title) != latest_str:
+                unread_data[title] = latest_str
                 self.push_notification(title, latest)
             elif not unread:
                 unread_data.pop(title, None)
@@ -154,7 +155,6 @@ class KenmeiClient:
             response.raise_for_status()
         except requests.RequestException as e:
             logging.error(f"Failed to send Pushover notification: {e}")
-        
 
 def get_env_variables() -> dict[str, str]:
     """
@@ -203,8 +203,6 @@ def load_unread_data(filename: str = "unread.json") -> dict[str, str]:
             return json.load(file)
     except (FileNotFoundError, json.JSONDecodeError):
         return {}
-
-
 
 def main():
     """Main execution function."""
