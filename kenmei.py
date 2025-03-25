@@ -117,6 +117,28 @@ class KenmeiClient:
                 logging.warning(f"Missing attributes for entry {entry.get('id')}")
                 continue
 
+            # new/
+            if not attributes: # no "title"
+                links = entry.get("links", {})
+                if not links: # no "manga_series_url"
+                    logging.warning(f"Missing attributes for entry {entry.get('id')}") # always has 'id'
+                    continue
+                manga_series_url = links.get("manga_series_url")
+                logging.warning(f"Missing attributes for entry {}")
+                
+                
+                
+                
+                manga_series_url = entry.get("links", {}).get("manga_series_url")
+                if not manga_series_url:
+                    logging.warning(f"Missing attributes for entry {entry.get('id')}")
+                    continue
+
+            
+
+            
+            # /new
+            
             title = attributes.get("title")
             unread = attributes.get("unread")
             latest = attributes.get("latestChapter", {})
@@ -124,18 +146,22 @@ class KenmeiClient:
             if isinstance(latest, dict):
                 latest = latest.get("chapter")
 
-            if isinstance(latest, (str, float, int)) and str(latest).replace(".", "", 1).isdigit():
-                latest = float(latest)
+            if isinstance(latest, str):
+                if "." in latest:
+                    latest = latest.rstrip("0").rstrip(".")
+            elif isinstance(latest, float):
+                if latest.is_integer():
+                    latest = int(latest)
 
             if not title or latest is None:
                 logging.warning(f"Missing title/latest chapter for {entry.get('id')}")
                 continue
 
-            latest_str = str(latest) if not latest.is_integer() else str(int(latest))
+            latest_str = str(latest)
 
             if unread and unread_data.get(title) != latest_str:
                 unread_data[title] = latest_str
-                self.push_notification(title, latest)
+                self.push_notification(title, latest_str)
             elif not unread:
                 unread_data.pop(title, None)
     
