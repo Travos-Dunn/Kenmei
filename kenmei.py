@@ -3,148 +3,220 @@ import os
 import json
 import requests
 import uuid
-from datetime import datetime
+import logging
 from typing import Any
 
-session = requests.Session()
+logging.basicConfig(level=logging.INFO)
 
-def get_config() -> dict[str, str]:
-    """Returns API keys and URL for Kenmei and Pushover."""
-    return {
-        "kenmei_login_url": "https://api.kenmei.co/auth/sessions",
-        "kenmei_manga_url": "https://api.kenmei.co/api/v2/manga_entries?page=1&status=1",
-        "kenmei_auth_key": "",
-        "pushover_acc_key": "",
-        "pushover_app_key": "",
+class KenmeiClient:
+    """
+    A client for interacting with the Kenmei API to retrieve manga entries and send notifications via Pushover.
+
+    :param email: The email address used for Kenmei login.
+    :type email: str
+
+    :param password: The password for Kenmei login.
+    :type password: str
+
+    :param pushover_app_key: The application key for Pushover notifications.
+    :type pushover_app_key: str
+
+    :param pushover_acc_key: The user key for Pushover notifications.
+    :type pushover_acc_key: str
+    """
+    BASE_URLS = {
+        "login": "https://api.kenmei.co/auth/sessions",
+        "manga": "https://api.kenmei.co/api/v2/manga_entries?page=1&status=1"
     }
 
-def generate_headers() -> dict[str, str]:
-    """Generates the necessary headers for requests."""
-    return {
-        "Accept": "application/json, text/plain, */*",
-        "Accept-Encoding": "gzip, deflate, br, zstd",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Connection": "keep-alive",
-        "Content-Type": "application/json",
-        "Origin": "https://www.kenmei.co",
-        "Referer": "https://www.kenmei.co/",
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
-        "X-Forwarded-For": "149.106.126.96",
-        "sentry-trace": f"{uuid.uuid4().hex}-{uuid.uuid4().hex}-1"
-    }
+    def __init__(self, email: str, password: str, pushover_app_key: str, pushover_acc_key: str):
+        self.session = requests.Session()
+        self.email = email
+        self.password = password
+        self.pushover_data = {
+            "token": pushover_app_key,
+            "user": pushover_acc_key,
+            "message": ""
+        }
+        self.auth_key = self.authenticate()
 
-def fetch_auth_key(login_url: str, email: str, password: str) -> str:
-    """Fetches the authentication key from the login API."""
-    headers = generate_headers()
-    data = {"user": {"login": email, "password": password, "remember_me": False}}
-    response = session.post(login_url, headers=headers, json=data)
+    @staticmethod
+    def generate_headers() -> dict[str, str]:
+        """
+        Generates HTTP headers for making requests to the Kenmei API.
+        
+        :return: A dictionary of HTTP headers.
+        :rtype: dict[str, str]
+        """
+        return {
+            "Accept": "application/json, text/plain, */*",
+            "Accept-Encoding": "gzip, deflate, br, zstd",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Connection": "keep-alive",
+            "Content-Type": "application/json",
+            "Origin": "https://www.kenmei.co",
+            "Referer": "https://www.kenmei.co/",
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
+            "X-Forwarded-For": "149.106.126.96",
+            "sentry-trace": f"{uuid.uuid4().hex}-{uuid.uuid4().hex}-1"
+        }
 
-    if response.status_code == 200:
-        return response.json().get("access")
-    else:
-        print(f"Login failed: {response.status_code}")
+    def authenticate(self) -> str | None:
+        """
+        Authenticates the user and retrieves an access token.
+
+        :return: The authentication token if successful, otherwise None.
+        :rtype: str | None
+        """
+        response = self.session.post(
+            self.BASE_URLS["login"],
+            headers=self.generate_headers(),
+            json={"user": {"login": self.email, "password": self.password, "remember_me": False}}
+        )
+
+        if response.status_code == 200:
+            return response.json().get("access")
+
+        logging.error(f"Login failed: {response.status_code}")
         return None
 
-def fetch_kenmei_data(kenmei_url: str, kenmei_key: str) -> Any:
-    """Fetches manga data from Kenmei API."""
-    session.headers.update({"Authorization": f"Bearer {kenmei_key}"})
+    def fetch_manga_data(self) -> dict[str, Any]:
+        """
+        Fetch manga entries from Kenmei API.
+
+        :return: A dictionary containing manga data.
+        :rtype: dict[str, Any]
+        """
+        if not self.auth_key:
+            logging.error("Authentication key is missing.")
+            return {}
+        
+        self.session.headers.update({"Authorization": f"Bearer {self.auth_key}"})
+        
+        try:
+            response = self.session.get(self.BASE_URLS["manga"])
+            response.raise_for_status()
+            return response.json()
+        except requests.RequestException as e:
+            logging.error(f"Failed to fetch Kenmei data: {e}")
+            return {}
+
+    def process_manga_entries(self, kenmei_data: dict[str, Any], unread_data: dict[str, str]) -> None:
+        """
+        Processes manga entries and sends notifications for new chapters.
+
+        :param kenmei_data: The retrieved manga data.
+        :type kenmei_data: dict[str, Any]
+
+        :param unread_data: A dictionary tracking unread chapters.
+        :type unread_data: dict[str, str]
+        """
+        for entry in kenmei_data.get("entries", []):
+            attributes = entry.get("attributes", {})
+            if not attributes:
+                logging.warning(f"Missing attributes for entry {entry.get('id')}")
+                continue
+
+            title = attributes.get("title")
+            unread = attributes.get("unread")
+            latest = attributes.get("latestChapter", {}).get("chapter")
+
+            if isinstance(latest, (str, float, int)) and str(latest).isdigit():
+                latest = int(latest)
+
+            if not title or latest is None:
+                logging.warning(f"Missing title/latest chapter for {entry.get('id')}")
+                continue
+
+            if unread and unread_data.get(title) != latest:
+                unread_data[title] = latest
+                self.push_notification(title, latest)
+            elif not unread:
+                unread_data.pop(title, None)
     
-    try:
-        response = session.get(kenmei_url)
-        response.raise_for_status()
-        return response.json()
-    except requests.exceptions.RequestException as e:
-        print(f"Failed to fetch Kenmei data: {e}")
-        return None
+    def push_notification(self, title: str, latest: str) -> None:
+        """
+        Sends a Pushover notification.
 
-def save_data(filename: str, data: Any) -> None:
-    """Saves data to a file in JSON format to same directory as script."""
+        :param title: The title of the manga.
+        :type title: str
+
+        :param latest: The latest chapter number.
+        :type latest: str
+        """
+        self.pushover_data["message"] = f"{title} | Ch. {latest} released!"
+        try:
+            response = requests.post("https://api.pushover.net/1/messages.json", data=self.pushover_data)
+            response.raise_for_status()
+        except requests.RequestException as e:
+            logging.error(f"Failed to send Pushover notification: {e}")
+        
+def get_env_variables() -> dict[str, str]:
+    """
+    Retrieves required environment variables for authentication.
+
+    :return: A dictionary containing the required environment variables.
+    :rtype: dict[str, str]
+    """
+    required_vars = ["KENMEI_EMAIL", "KENMEI_PASSWORD", "PUSHOVER_APP_KEY", "PUSHOVER_ACC_KEY"]
+    missing_vars = [var for var in required_vars if var not in os.environ]
+    if missing_vars:
+        logging.error(f"Missing required environment variables: {', '.join(missing_vars)}")
+        return {}
+    
+    return {var.lower(): os.environ[var] for var in required_vars}
+
+def save_data(filename: str, data: dict[str, Any]) -> None:
+    """
+    Saves data to a JSON file.
+
+    :param filename: The name of the file.
+    :type filename: str
+
+    :param data: Data to write to JSON file.
+    :type data: dict[str, Any]
+    """
     try:
-        directory = os.path.dirname(os.path.abspath(__file__))
-        filepath = os.path.join(directory, filename)
+        filepath = os.path.join(os.path.dirname(os.path.abspath(__file__)), filename)
         with open(filepath, "w") as file:
             json.dump(data, file, indent=4)
     except IOError as e:
-        print(f"Failed to save {filename}: {e}")
+        logging.error(f"Failed to save {filename}: {e}")
 
 def load_unread_data(filename: str = "unread.json") -> dict[str, str]:
-    """Loads unread manga data from a file, returning an empty dictionary if the file is missing or invalid."""
+    """
+    Loads unread manga data from a file.
+
+    :param filename: The name of the file.
+    :type filename: str
+
+    :return: Dictionary of unread manga entries.
+    :rtype: dict[str, str]
+    """
     try:
         with open(filename, "r") as file:
             return json.load(file)
     except (FileNotFoundError, json.JSONDecodeError):
         return {}
 
-def push_notification(pushover_data: dict[str, str], title: str, latest: str) -> None:
-    """Sends a notification using Pushover."""
-    pushover_data["message"] = f"{title} | Ch. {latest} released!"
-    requests.post("https://api.pushover.net/1/messages.json", data=pushover_data)
-    
-    # DEBUG
-    # print(f"{title} | Ch. {latest} released!")
-
-def process_manga_entries(kenmei_data: dict[str, Any], unread_data: dict[str, str], pushover_data: dict[str, str]) -> None:
-    """Process manga entires, updating unread data and sending notifications if needed."""
-    entries = kenmei_data.get("entries", [])
-    for entry in entries:
-        attributes = entry.get("attributes", {})
-        if not attributes:
-            print(f"Failed to retrieve attributes for {entry.get('id')}")
-            continue
-
-        title = attributes.get("title")
-        unread = attributes.get("unread")
-        latest = attributes.get("latestChapter", {}).get("chapter")
-        latest = int(latest) if isinstance(latest, (float, int)) and latest == round(latest) else latest
-
-        if not (title or latest):
-            print(f"Missing title or latest chapter info for {entry.get('id')}")
-            continue
-        
-        if unread:
-            if unread_data.get(title) != latest:
-                unread_data[title] = latest
-                push_notification(pushover_data, title, latest)
-        else:
-            unread_data.pop(title, None)
-
 def main():
     """Main execution function."""
-    print(f"Script last ran at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-
-    email = os.getenv("KENMEI_EMAIL")
-    password = os.getenv("KENMEI_PASSWORD")
-    pushover_acc_key = os.getenv("PUSHOVER_ACC_KEY")
-    pushover_app_key = os.getenv("PUSHOVER_APP_KEY")
-
-    if not all([email, password, pushover_acc_key, pushover_app_key]):
-        print("Missing environment variables.")
+    private = get_env_variables()
+    if not private:
         return
-
-    config = get_config()
-    config["pushover_acc_key"] = pushover_acc_key
-    config["pushover_app_key"] = pushover_app_key
-
-    pushover_data = {
-        "token": config["pushover_app_key"],
-        "user": config["pushover_acc_key"],
-        "message": ""
-    }
-
-    auth_key = fetch_auth_key(config["kenmei_login_url"], email, password)
-    if not auth_key:
-        print("Failed to collect authentication key.")
-        return
-    config["kenmei_auth_key"] = auth_key
-
-    kenmei_data = fetch_kenmei_data(config["kenmei_manga_url"], config["kenmei_auth_key"])
+    
+    client = KenmeiClient(
+        email=private["kenmei_email"],
+        password=private["kenmei_password"],
+        pushover_app_key=private["pushover_app_key"],
+        pushover_acc_key=private["pushover_acc_key"]
+    )
+    kenmei_data = client.fetch_manga_data()
     if not kenmei_data:
-        print(f"Failed to load Kenmei data.")
         return
-
+    
     unread_data = load_unread_data()
-    process_manga_entries(kenmei_data, unread_data, pushover_data)
-
+    client.process_manga_entries(kenmei_data, unread_data)
     save_data("unread.json", unread_data)
 
 if __name__ == "__main__":
