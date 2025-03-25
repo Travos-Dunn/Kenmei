@@ -113,56 +113,30 @@ class KenmeiClient:
         """
         for entry in kenmei_data.get("entries", []):
             attributes = entry.get("attributes", {})
-            if not attributes:
-                logging.warning(f"Missing attributes for entry {entry.get('id')}")
-                continue
-
-            # new/
-            if not attributes: # no "title"
-                links = entry.get("links", {})
-                if not links: # no "manga_series_url"
-                    logging.warning(f"Missing attributes for entry {entry.get('id')}") # always has 'id'
-                    continue
-                manga_series_url = links.get("manga_series_url")
-                logging.warning(f"Missing attributes for entry {}")
-                
-                
-                
-                
-                manga_series_url = entry.get("links", {}).get("manga_series_url")
-                if not manga_series_url:
-                    logging.warning(f"Missing attributes for entry {entry.get('id')}")
-                    continue
-
-            
-
-            
-            # /new
-            
             title = attributes.get("title")
             unread = attributes.get("unread")
             latest = attributes.get("latestChapter", {})
-            
-            if isinstance(latest, dict):
-                latest = latest.get("chapter")
 
-            if isinstance(latest, str):
-                if "." in latest:
-                    latest = latest.rstrip("0").rstrip(".")
-            elif isinstance(latest, float):
-                if latest.is_integer():
-                    latest = int(latest)
+            manga_series_url = entry.get("links", {}).get("manga_series_url")
 
             if not title or latest is None:
-                logging.warning(f"Missing title/latest chapter for {entry.get('id')}")
+                logging.warning(f"Missing title/latest chapter for {manga_series_url or entry.get('id')}")
                 continue
 
+            if isinstance(latest, dict):
+                latest = latest.get("chapter")
+            if isinstance(latest, str) and "." in latest:
+                latest = latest.rstrip("0").rstrip(".")
+            elif isinstance(latest, float) and latest.is_integer():
+                latest = int(latest)
+            
             latest_str = str(latest)
 
-            if unread and unread_data.get(title) != latest_str:
-                unread_data[title] = latest_str
-                self.push_notification(title, latest_str)
-            elif not unread:
+            if unread:
+                if unread_data.get(title) != latest_str:
+                    unread_data[title] = latest_str
+                    self.push_notification(title, latest_str)
+            else:
                 unread_data.pop(title, None)
     
     def push_notification(self, title: str, latest: str) -> None:
