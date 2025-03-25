@@ -125,6 +125,7 @@ class KenmeiClient:
 
             if isinstance(latest, dict):
                 latest = latest.get("chapter")
+
             if isinstance(latest, str) and "." in latest:
                 latest = latest.rstrip("0").rstrip(".")
             elif isinstance(latest, float) and latest.is_integer():
