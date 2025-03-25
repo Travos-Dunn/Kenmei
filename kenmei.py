@@ -24,6 +24,7 @@ class KenmeiClient:
     :param pushover_acc_key: The user key for Pushover notifications.
     :type pushover_acc_key: str
     """
+
     BASE_URLS = {
         "login": "https://api.kenmei.co/auth/sessions",
         "manga": "https://api.kenmei.co/api/v2/manga_entries?page=1&status=1"
@@ -119,10 +120,13 @@ class KenmeiClient:
 
             title = attributes.get("title")
             unread = attributes.get("unread")
-            latest = attributes.get("latestChapter", {}).get("chapter")
+            latest = attributes.get("latestChapter", {})
+            
+            if isinstance(latest, dict):
+                latest = latest.get("chapter")
 
-            if isinstance(latest, (str, float, int)) and str(latest).isdigit():
-                latest = int(latest)
+            if isinstance(latest, (str, float, int)) and str(latest).replace(".", "", 1).isdigit():
+                latest = int(float(latest))
 
             if not title or latest is None:
                 logging.warning(f"Missing title/latest chapter for {entry.get('id')}")
@@ -151,6 +155,7 @@ class KenmeiClient:
         except requests.RequestException as e:
             logging.error(f"Failed to send Pushover notification: {e}")
         
+
 def get_env_variables() -> dict[str, str]:
     """
     Retrieves required environment variables for authentication.
@@ -198,6 +203,8 @@ def load_unread_data(filename: str = "unread.json") -> dict[str, str]:
             return json.load(file)
     except (FileNotFoundError, json.JSONDecodeError):
         return {}
+
+
 
 def main():
     """Main execution function."""
