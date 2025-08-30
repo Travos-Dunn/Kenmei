@@ -2,6 +2,8 @@
 import os
 import json
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 import uuid
 import logging
 from typing import Any
@@ -26,11 +28,22 @@ class KenmeiClient:
     """
     BASE_URLS = {
         "login": "https://api.kenmei.co/auth/sessions",
-        "manga": "https://api.kenmei.co/api/v2/manga_entries?page=1&status=1"
+        "manga": "https://api.kenmei.co/api/v2/manga_entries?page={}&status=1"
     }
 
     def __init__(self, email: str, password: str, pushover_app_key: str, pushover_acc_key: str):
         self.session = requests.Session()
+        retry_strategy = Retry(
+            total=3,
+            backoff_factor=1,
+            status_forcelist=[429, 500, 502, 503, 504],
+            allowed_methods=["HEAD", "GET", "OPTIONS", "POST"]
+        )
+        adapter = HTTPAdapter(max_retries=retry_strategy)
+        self.session.mount("http://", adapter)
+        self.session.mount("https://", adapter)
+
+
         self.email = email
         self.password = password
         self.pushover_data = {
@@ -68,23 +81,25 @@ class KenmeiClient:
         :return: The authentication token if successful, otherwise None.
         :rtype: str | None
         """
-        response = self.session.post(
-            self.BASE_URLS["login"],
-            headers=self.generate_headers(),
-            json={"user": {"login": self.email, "password": self.password, "remember_me": False}}
-        )
-
-        if response.status_code == 200:
+        try:
+            response = self.session.post(
+                self.BASE_URLS["login"],
+                headers=self.generate_headers(),
+                json={"user": {"login": self.email, "password": self.password, "remember_me": False}},
+                timeout=10
+            )
+            response.raise_for_status()
             return response.json().get("access")
-
-        logging.error(f"Login failed: {response.status_code}")
-        return None
+        except requests.RequestException as e:
+            logging.error(f"Login failed: {e}")
+            return None
 
     def fetch_manga_data(self) -> dict[str, Any]:
         """
-        Fetch manga entries from Kenmei API.
+        Fetch manga entries across multiple pages (if available) from Kenmei API.
+        Stop when two invalid pages are encountered in a row.
 
-        :return: A dictionary containing manga data.
+        :return: A dictionary containing all manga data.
         :rtype: dict[str, Any]
         """
         if not self.auth_key:
@@ -93,13 +108,38 @@ class KenmeiClient:
         
         self.session.headers.update({"Authorization": f"Bearer {self.auth_key}"})
         
-        try:
-            response = self.session.get(self.BASE_URLS["manga"])
-            response.raise_for_status()
-            return response.json()
-        except requests.RequestException as e:
-            logging.error(f"Failed to fetch Kenmei data: {e}")
-            return {}
+        all_entries = []
+        page = 1
+        invalid_count = 0
+
+        while True:
+            url = self.BASE_URLS["manga"].format(page)
+            
+            try:
+                response = self.session.get(url, timeout=10)
+                if response.status_code == 200:
+                    data = response.json()
+                    page_entries = data.get("entries", [])
+                    if not page_entries:
+                        logging.info(f"No entries found on page {page}")
+                        invalid_count += 1
+                    else:
+                        all_entries.extend(page_entries)
+                        logging.info(f"Fetched {len(page_entries)} entries from page {page}")
+                        invalid_count = 0
+                else:
+                    logging.warning(f"Invalid response {response.status_code} on page {page}")
+                    invalid_count += 1
+            except requests.RequestException as e:
+                logging.error(f"Failed to fetch Kenmei data on page {page}: {e}")
+                invalid_count += 1
+            
+            if invalid_count >= 2:
+                break
+            
+            page += 1
+        
+        return {"entries": all_entries}
 
     def process_manga_entries(self, kenmei_data: dict[str, Any], unread_data: dict[str, str]) -> None:
         """
@@ -152,7 +192,11 @@ class KenmeiClient:
         """
         self.pushover_data["message"] = f"{title} | Ch. {latest} released!"
         try:
-            response = requests.post("https://api.pushover.net/1/messages.json", data=self.pushover_data)
+            response = requests.post(
+                "https://api.pushover.net/1/messages.json", 
+                data=self.pushover_data,
+                timeout=10
+            )
             response.raise_for_status()
         except requests.RequestException as e:
             logging.error(f"Failed to send Pushover notification: {e}")
