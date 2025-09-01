@@ -114,7 +114,7 @@ class KenmeiClient:
 
         while True:
             url = self.BASE_URLS["manga"].format(page)
-            print(f"{page}: {url}"
+            print(f"{page}: {url}")
             try:
                 response = self.session.get(url, timeout=10)
                 if response.status_code == 200:
