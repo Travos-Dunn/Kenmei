@@ -10,6 +10,9 @@ from typing import Any
 
 logging.basicConfig(level=logging.INFO)
 
+BASE_DIR = os.path.dirname(__file__)
+UNREAD_FILE = os.path.join(BASE_DIR, "unread.json")
+
 class KenmeiClient:
     """
     A client for interacting with the Kenmei API to retrieve manga entries and send notifications via Pushover.
@@ -43,7 +46,6 @@ class KenmeiClient:
         self.session.mount("http://", adapter)
         self.session.mount("https://", adapter)
 
-
         self.email = email
         self.password = password
         self.pushover_data = {
@@ -51,10 +53,10 @@ class KenmeiClient:
             "user": pushover_acc_key,
             "message": ""
         }
+        self.sentry_trace = f"{uuid.uuid4().hex}-{uuid.uuid4().hex}-1"
         self.auth_key = self.authenticate()
 
-    @staticmethod
-    def generate_headers() -> dict[str, str]:
+    def generate_headers(self) -> dict[str, str]:
         """
         Generates HTTP headers for making requests to the Kenmei API.
         
@@ -70,8 +72,7 @@ class KenmeiClient:
             "Origin": "https://www.kenmei.co",
             "Referer": "https://www.kenmei.co/",
             "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
-            "X-Forwarded-For": "149.106.126.96",
-            "sentry-trace": f"{uuid.uuid4().hex}-{uuid.uuid4().hex}-1"
+            "sentry-trace": self.sentry_trace
         }
 
     def authenticate(self) -> str | None:
@@ -89,6 +90,7 @@ class KenmeiClient:
                 timeout=10
             )
             response.raise_for_status()
+            logging.debug("Authentication successful")
             return response.json().get("access")
         except requests.RequestException as e:
             logging.error(f"Login failed: {e}")
@@ -97,7 +99,6 @@ class KenmeiClient:
     def fetch_manga_data(self) -> dict[str, Any]:
         """
         Fetch manga entries across multiple pages (if available) from Kenmei API.
-        Stop when two invalid pages are encountered in a row.
 
         :return: A dictionary containing all manga data.
         :rtype: dict[str, Any]
@@ -107,78 +108,104 @@ class KenmeiClient:
             return {}
         
         self.session.headers.update({"Authorization": f"Bearer {self.auth_key}"})
-        
         all_entries = []
-        page = 1
-        invalid_count = 0
 
-        while True:
-            url = self.BASE_URLS["manga"].format(page)
-            print(f"{page}: {url}")
+        try:
+            response = self.session.get(self.BASE_URLS["manga"].format(1), timeout=10)
+            response.raise_for_status()
+            
             try:
-                response = self.session.get(url, timeout=10)
-                if response.status_code == 200:
-                    data = response.json()
-                    page_entries = data.get("entries", [])
-                    if not page_entries:
-                        logging.info(f"No entries found on page {page}")
-                        invalid_count += 1
-                    else:
+                data = response.json()
+            except ValueError:
+                logging.error("Invalid JSON response from Kenmei API")
+                return {"entries": []}
+
+            pages = data.get("pagy", {}).get("pages", 0) or 1
+            logging.debug(f"Found {pages} page(s) of manga entries")
+
+            for page in range(1, pages + 1):
+                try:
+                    response = self.session.get(self.BASE_URLS["manga"].format(page), timeout=10)
+                    response.raise_for_status()
+                    page_entries = response.json().get("entries", [])
+                    if page_entries:
                         all_entries.extend(page_entries)
-                        logging.info(f"Fetched {len(page_entries)} entries from page {page}")
-                        invalid_count = 0
-                else:
-                    logging.warning(f"Invalid response {response.status_code} on page {page}")
-                    invalid_count += 1
-            except requests.RequestException as e:
-                logging.error(f"Failed to fetch Kenmei data on page {page}: {e}")
-                invalid_count += 1
-            
-            if invalid_count >= 2:
-                break
-            
-            page += 1
+                        logging.debug(f"Fetched {len(page_entries)} entries from page {page}")
+                    else:
+                        logging.debug(f"No entries found on page {page}")
+                except requests.RequestException as e:
+                    logging.error(f"Failed to fetch data on page {page}: {e}")
+        except requests.RequestException as e:
+            logging.error(f"Initial data request failed: {e}")
         
         return {"entries": all_entries}
 
-    def process_manga_entries(self, kenmei_data: dict[str, Any], unread_data: dict[str, str]) -> None:
+    def process_manga_entries(self, kenmei_data: dict[str, Any]) -> dict[str, str]:
         """
         Processes manga entries and sends notifications for new chapters.
 
         :param kenmei_data: The retrieved manga data.
         :type kenmei_data: dict[str, Any]
 
-        :param unread_data: A dictionary tracking unread chapters.
-        :type unread_data: dict[str, str]
+        :return: A dictionary of unread manga data
+        :rtype: dict[str, str]
         """
+        try:
+            unread_data = load_unread_data()
+        except Exception as e:
+            logging.error(f"Failed to load unread data: {e}")
+            unread_data = {}
+        
+        updated_data: dict[str, str] = {}
+
         for entry in kenmei_data.get("entries", []):
-            attributes = entry.get("attributes", {})
-            title = attributes.get("title")
-            unread = attributes.get("unread")
-            latest = attributes.get("latestChapter", {})
+            try:
+                attributes = entry.get("attributes", {})
+                title = attributes.get("title")
+                unread = attributes.get("unread", False)
+                latest = attributes.get("latestChapter", {})
 
-            manga_series_url = entry.get("links", {}).get("manga_series_url")
+                if not title:
+                    logging.warning(f"Skipping entry with missing title: {entry}")
+                    continue
+                
+                if isinstance(latest, dict):
+                    latest = latest.get("chapter")
 
-            if not title or latest is None:
-                logging.warning(f"Missing title/latest chapter for {manga_series_url or entry.get('id')}")
+                if latest is None:
+                    logging.warning(f"Skipping entry with no chapter info: {title}")
+                    continue
+                
+                if isinstance(latest, (int, float)):
+                    if isinstance(latest, float) and latest.is_integer():
+                        latest = int(latest)
+
+                latest_str = str(latest).strip()
+
+                if latest_str in ("", "0"):
+                    logging.warning(f"Skipping entry with empty or zero chapter: {title}")
+                    continue
+                
+                if "." in latest_str:
+                    latest_str = latest_str.rstrip("0").rstrip(".")
+                
+                if bool(unread):
+                    prev = unread_data.get(title)
+                    if prev != latest_str:
+                        try:
+                            self.push_notification(title, latest_str)
+                        except Exception as e:
+                            logging.error(f"Failed to send notification for {title}: {e}")
+                    updated_data[title] = latest_str
+            except Exception as e:
+                logging.error(f"Error processing entry {entry}: {e}")
                 continue
+        
+        removed_titles = set(unread_data) - set(updated_data)
+        if removed_titles:
+            logging.debug(f"Removed stale titles: {', '.join(removed_titles)}")
 
-            if isinstance(latest, dict):
-                latest = latest.get("chapter")
-
-            if isinstance(latest, str) and "." in latest:
-                latest = latest.rstrip("0").rstrip(".")
-            elif isinstance(latest, float) and latest.is_integer():
-                latest = int(latest)
-            
-            latest_str = str(latest)
-
-            if unread:
-                if unread_data.get(title) != latest_str:
-                    unread_data[title] = latest_str
-                    self.push_notification(title, latest_str)
-            else:
-                unread_data.pop(title, None)
+        return updated_data
     
     def push_notification(self, title: str, latest: str) -> None:
         """
@@ -192,11 +219,7 @@ class KenmeiClient:
         """
         self.pushover_data["message"] = f"{title} | Ch. {latest} released!"
         try:
-            response = requests.post(
-                "https://api.pushover.net/1/messages.json", 
-                data=self.pushover_data,
-                timeout=10
-            )
+            response = self.session.post("https://api.pushover.net/1/messages.json", data=self.pushover_data, timeout=10)
             response.raise_for_status()
         except requests.RequestException as e:
             logging.error(f"Failed to send Pushover notification: {e}")
@@ -214,40 +237,32 @@ def get_env_variables() -> dict[str, str]:
         logging.error(f"Missing required environment variables: {', '.join(missing_vars)}")
         return {}
     
-    return {var.lower(): os.environ[var] for var in required_vars}
+    return {var: os.environ[var] for var in required_vars}
 
-def save_data(filename: str, data: dict[str, Any]) -> None:
+def save_data(data: dict[str, str]) -> None:
     """
-    Saves data to a JSON file.
-
-    :param filename: The name of the file.
-    :type filename: str
+    Saves data to a `unread.json`.
 
     :param data: Data to write to JSON file.
     :type data: dict[str, Any]
     """
-    try:
-        filepath = os.path.join(os.path.dirname(os.path.abspath(__file__)), filename)
-        with open(filepath, "w") as file:
-            json.dump(data, file, indent=4)
-    except IOError as e:
-        logging.error(f"Failed to save {filename}: {e}")
+    with open(UNREAD_FILE, "w", encoding="utf-8") as file:
+        json.dump(data, file, indent=4, ensure_ascii=False)
 
-def load_unread_data(filename: str = "unread.json") -> dict[str, str]:
+def load_unread_data() -> dict[str, str]:
     """
-    Loads unread manga data from a file.
-
-    :param filename: The name of the file.
-    :type filename: str
+    Loads unread manga data from `unread.json`.
 
     :return: Dictionary of unread manga entries.
     :rtype: dict[str, str]
     """
-    try:
-        with open(filename, "r") as file:
-            return json.load(file)
-    except (FileNotFoundError, json.JSONDecodeError):
-        return {}
+    if os.path.exists(UNREAD_FILE):
+        try:
+            with open(UNREAD_FILE, "r", encoding="utf-8") as file:
+                return json.load(file)
+        except json.JSONDecodeError as e:
+            logging.error(f"Failed to open {UNREAD_FILE}: {e}")
+    return {}
 
 def main():
     """Main execution function."""
@@ -256,18 +271,17 @@ def main():
         return
     
     client = KenmeiClient(
-        email=private["kenmei_email"],
-        password=private["kenmei_password"],
-        pushover_app_key=private["pushover_app_key"],
-        pushover_acc_key=private["pushover_acc_key"]
+        email=private["KENMEI_EMAIL"],
+        password=private["KENMEI_PASSWORD"],
+        pushover_app_key=private["PUSHOVER_APP_KEY"],
+        pushover_acc_key=private["PUSHOVER_ACC_KEY"]
     )
     kenmei_data = client.fetch_manga_data()
     if not kenmei_data:
         return
     
-    unread_data = load_unread_data()
-    client.process_manga_entries(kenmei_data, unread_data)
-    save_data("unread.json", unread_data)
+    new_data = client.process_manga_entries(kenmei_data)
+    save_data(new_data)
 
 if __name__ == "__main__":
     main()
